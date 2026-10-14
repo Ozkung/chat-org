@@ -5,8 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "signaling": "node node_modules/y-webrtc/bin/server.js"
+    "start": "next start"
   },
   "dependencies": {
     "@tiptap/core": "^3.32.0",
@@ -21,9 +20,9 @@
     "next": "^16.4.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "trystero": "^0.26.0",
     "y-indexeddb": "^9.0.12",
     "y-protocols": "^1.0.7",
-    "y-webrtc": "^10.3.0",
     "yjs": "^13.6.33"
   }
 }
