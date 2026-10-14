@@ -49,10 +49,10 @@ export function RemoteCursors({ awareness }) {
 export function OnlineUsers({ awareness, status }) {
   const states = useAwarenessStates(awareness);
   const people = [...states].sort((a, b) => (a.isSelf ? -1 : b.isSelf ? 1 : 0));
-  const live = status.signaling || status.peers > 0;
+  const live = status.relays > 0 || status.peers > 0;
   const title = live
-    ? `${people.length} in this room · ${status.peers} direct connection${status.peers === 1 ? '' : 's'}`
-    : 'Not connected to the signaling server — edits are saved locally and sync when it reconnects';
+    ? `${people.length} in this room · ${status.peers} peer connection${status.peers === 1 ? '' : 's'} · ${status.relays} relay${status.relays === 1 ? '' : 's'}`
+    : 'Looking for relays… edits are saved locally and sync once connected';
   return (
     <div className="online" title={title}>
       <span className={`dot ${live ? 'live' : ''}`} />
