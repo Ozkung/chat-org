@@ -3,6 +3,8 @@
 import { useEffect } from 'react';
 import { useEditor, useEditorState, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import Collaboration from '@tiptap/extension-collaboration';
+import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 
 const TOOLBAR = [
   { label: 'B', title: 'Bold', isActive: (e) => e.isActive('bold'), run: (c) => c.toggleBold(), style: { fontWeight: 700 } },
@@ -14,27 +16,30 @@ const TOOLBAR = [
   { label: '</>', title: 'Code block', isActive: (e) => e.isActive('codeBlock'), run: (c) => c.toggleCodeBlock() },
 ];
 
-export default function TiptapEditor({ value, onChange }) {
-  const editor = useEditor({
-    extensions: [StarterKit],
-    content: value,
-    immediatelyRender: false, // required for SSR-safe rendering in Next.js
-    editorProps: { attributes: { class: 'tiptap-content' } },
-    onUpdate: ({ editor }) => onChange(editor.getHTML()),
-  });
+// Rich-text editor bound to a Y.XmlFragment, with live carets of other people.
+export default function TiptapEditor({ fragment, provider, user }) {
+  const editor = useEditor(
+    {
+      extensions: [
+        StarterKit.configure({ undoRedo: false }), // Collaboration ships its own Yjs-aware undo
+        Collaboration.configure({ fragment }),
+        CollaborationCaret.configure({ provider, user }),
+      ],
+      immediatelyRender: false, // required for SSR-safe rendering in Next.js
+      editorProps: { attributes: { class: 'tiptap-content' } },
+    },
+    [fragment, provider],
+  );
+
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) editor.commands.updateUser(user);
+  }, [editor, user]);
 
   // Tiptap v3 doesn't re-render on every transaction, so subscribe to toolbar state explicitly.
   const active = useEditorState({
     editor,
     selector: ({ editor: e }) => (e ? TOOLBAR.map((btn) => btn.isActive(e)) : []),
   });
-
-  // Sync external changes (e.g. importing a board) without clobbering active typing.
-  useEffect(() => {
-    if (editor && !editor.isFocused && value !== editor.getHTML()) {
-      editor.commands.setContent(value, { emitUpdate: false });
-    }
-  }, [editor, value]);
 
   if (!editor) return <div className="tiptap-wrapper tiptap-loading">Loading editor…</div>;
 
