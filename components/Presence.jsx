@@ -51,8 +51,8 @@ export function OnlineUsers({ awareness, status }) {
   const people = [...states].sort((a, b) => (a.isSelf ? -1 : b.isSelf ? 1 : 0));
   const live = status.relays > 0 || status.peers > 0;
   const title = live
-    ? `${people.length} in this room · ${status.peers} peer connection${status.peers === 1 ? '' : 's'} · ${status.relays} relay${status.relays === 1 ? '' : 's'}`
-    : 'Looking for relays… edits are saved locally and sync once connected';
+    ? `${people.length} in this room · ${status.relays} relay server${status.relays === 1 ? '' : 's'} · ${status.peers} direct connection${status.peers === 1 ? '' : 's'}`
+    : 'Connecting… edits are saved locally and sync once connected';
   return (
     <div className="online" title={title}>
       <span className={`dot ${live ? 'live' : ''}`} />
@@ -69,6 +69,9 @@ export function OnlineUsers({ awareness, status }) {
         ))}
         {people.length > 6 && <div className="avatar more">+{people.length - 6}</div>}
       </div>
+      <span className="conn-text">
+        {live ? `Live · relay ${status.relays} · direct ${status.peers}` : 'Connecting…'}
+      </span>
     </div>
   );
 }

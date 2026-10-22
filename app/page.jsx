@@ -382,8 +382,21 @@ function Room() {
     }
   }, [user]);
 
-  const session = useCollabSession(room?.roomId, room?.seed, user);
+  const { session, error } = useCollabSession(room?.roomId, room?.seed, user);
 
+  if (error) {
+    return (
+      <div className="loading-screen">
+        <div className="join-error">
+          <strong>Couldn&apos;t join this board.</strong>
+          <span>{error}</span>
+          <button type="button" className="tb-btn primary" onClick={() => window.location.reload()}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!session) return <div className="loading-screen">Joining board…</div>;
 
   return (
