@@ -1,10 +1,11 @@
 'use client';
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Handle, Position, useReactFlow } from '@xyflow/react';
+import { Handle, NodeResizer, Position, useReactFlow } from '@xyflow/react';
 import dynamic from 'next/dynamic';
-import { NODE_TYPES, initials, makeId } from '@/lib/board';
+import { NODE_MIN_SIZE, NODE_TYPES, initials, makeId } from '@/lib/board';
 import { useCollab, useYArray, useYMapValue } from '@/lib/collab';
+import { prepareImage, uploadImage } from '@/lib/image';
 import CollabText from './CollabText';
 
 // Tiptap touches the DOM, so load it client-only.
@@ -21,19 +22,20 @@ function formatTime(iso) {
 
 /* ---------- Content renderers (one per type) ---------- */
 
-function TextContent({ ytext }) {
+function TextContent({ ytext, readOnly }) {
   return (
     <CollabText
       ytext={ytext}
       multiline
+      readOnly={readOnly}
       className="field textarea nodrag nowheel"
       rows={5}
-      placeholder="Quick notes…"
+      placeholder={readOnly ? '' : 'Quick notes…'}
     />
   );
 }
 
-function ImageContent({ ytext }) {
+function ImageContent({ ytext, readOnly }) {
   const [url, setUrl] = useState('');
   const [status, setStatus] = useState('idle'); // idle | loading | ok | error
   const src = url.trim();
@@ -47,6 +49,7 @@ function ImageContent({ ytext }) {
       <CollabText
         ytext={ytext}
         onValue={setUrl}
+        readOnly={readOnly}
         className="field nodrag"
         type="url"
         placeholder="https://example.com/image.png"
@@ -71,7 +74,7 @@ function ImageContent({ ytext }) {
   );
 }
 
-function JsonContent({ ytext }) {
+function JsonContent({ ytext, readOnly }) {
   const [value, setValue] = useState('');
   const error = useMemo(() => {
     if (!value.trim()) return null;
@@ -101,43 +104,140 @@ function JsonContent({ ytext }) {
         ytext={ytext}
         multiline
         onValue={setValue}
+        readOnly={readOnly}
         className={`field textarea mono nodrag nowheel ${error ? 'invalid' : ''}`}
         rows={7}
         spellCheck={false}
       />
       <div className="json-footer">
         <span className={error ? 'error-text' : 'ok-text'}>{error ? `✖ ${error}` : '✔ Valid JSON'}</span>
-        <button type="button" className="link-btn nodrag" onClick={format} disabled={!!error}>
-          Format
-        </button>
+        {!readOnly && (
+          <button type="button" className="link-btn nodrag" onClick={format} disabled={!!error}>
+            Format
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-/* ---------- Notes / discussion section ---------- */
+/* ---------- Notes / discussion section (text + photos) ---------- */
+
+function NoteComposer({ ynotes, onPosted }) {
+  const { user, roomId } = useCollab();
+  const [draft, setDraft] = useState('');
+  const [attachment, setAttachment] = useState(null); // { prepared, previewUrl }
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const fileRef = useRef(null);
+
+  useEffect(() => () => attachment && URL.revokeObjectURL(attachment.previewUrl), [attachment]);
+
+  const attach = async (file) => {
+    setError(null);
+    try {
+      const prepared = await prepareImage(file);
+      setAttachment({ prepared, previewUrl: URL.createObjectURL(prepared.blob) });
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const onPaste = (e) => {
+    const file = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith('image/'));
+    if (file) {
+      e.preventDefault();
+      attach(file);
+    }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const message = draft.trim();
+    if ((!message && !attachment) || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const image = attachment ? await uploadImage(roomId, attachment.prepared) : undefined;
+      ynotes.push([
+        {
+          id: makeId('note'),
+          authorId: user.id,
+          author: user.name,
+          color: user.color,
+          message,
+          ...(image ? { image } : {}),
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      setDraft('');
+      setAttachment(null);
+      onPosted();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="note-form" onSubmit={submit}>
+      {attachment && (
+        <div className="attachment">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={attachment.previewUrl} alt="Attachment preview" />
+          <button type="button" className="note-delete visible nodrag" title="Remove photo" onClick={() => setAttachment(null)}>
+            ✕
+          </button>
+        </div>
+      )}
+      {error && <div className="error-text">{error}</div>}
+      <div className="note-form-row">
+        <button
+          type="button"
+          className="icon-btn attach-btn nodrag"
+          title="Add a photo (camera or library)"
+          onClick={() => fileRef.current?.click()}
+          disabled={busy}
+        >
+          📷
+        </button>
+        {/* No `capture` attribute: phones then offer both "Take photo" and "Photo library". */}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) attach(file);
+          }}
+        />
+        <input
+          className="field nodrag"
+          placeholder={`Add a note as ${user.name}…`}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onPaste={onPaste}
+        />
+        <button type="submit" className="btn-primary nodrag" disabled={busy || (!draft.trim() && !attachment)}>
+          {busy ? '…' : 'Send'}
+        </button>
+      </div>
+    </form>
+  );
+}
 
 function NotesSection({ ynotes }) {
-  const { user } = useCollab();
+  const { user, readOnly, isOwner } = useCollab();
   const notes = useYArray(ynotes);
   const [open, setOpen] = useState(false); // per-viewer UI state, not shared
-  const [draft, setDraft] = useState('');
   const listRef = useRef(null);
 
   useEffect(() => {
     if (open && listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [open, notes.length]);
-
-  const submit = (e) => {
-    e.preventDefault();
-    const message = draft.trim();
-    if (!message) return;
-    ynotes.push([
-      { id: makeId('note'), author: user.name, color: user.color, message, createdAt: new Date().toISOString() },
-    ]);
-    setDraft('');
-    setOpen(true);
-  };
 
   const remove = (noteId) => {
     const index = ynotes.toArray().findIndex((n) => n.id === noteId);
@@ -165,11 +265,25 @@ function NotesSection({ ynotes }) {
                   <div className="note-meta">
                     <strong>{n.author}</strong>
                     <span className="muted">{formatTime(n.createdAt)}</span>
-                    <button type="button" className="note-delete nodrag" title="Delete note" onClick={() => remove(n.id)}>
-                      ✕
-                    </button>
+                    {!readOnly && (isOwner || n.authorId === user.id) && (
+                      <button type="button" className="note-delete nodrag" title="Delete note" onClick={() => remove(n.id)}>
+                        ✕
+                      </button>
+                    )}
                   </div>
-                  <div className="note-message">{n.message}</div>
+                  {n.image?.url && (
+                    <a href={n.image.url} target="_blank" rel="noreferrer" className="note-image nodrag">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={n.image.url}
+                        alt="Photo"
+                        loading="lazy"
+                        draggable={false}
+                        style={n.image.width ? { aspectRatio: `${n.image.width} / ${n.image.height}` } : undefined}
+                      />
+                    </a>
+                  )}
+                  {n.message && <div className="note-message">{n.message}</div>}
                 </div>
               </div>
             ))}
@@ -177,17 +291,7 @@ function NotesSection({ ynotes }) {
         </div>
       )}
 
-      <form className="note-form" onSubmit={submit}>
-        <input
-          className="field nodrag"
-          placeholder={`Add a note as ${user.name}…`}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button type="submit" className="btn-primary nodrag" disabled={!draft.trim()}>
-          Send
-        </button>
-      </form>
+      {!readOnly && <NoteComposer ynotes={ynotes} onPosted={() => setOpen(true)} />}
     </div>
   );
 }
@@ -195,30 +299,44 @@ function NotesSection({ ynotes }) {
 /* ---------- The node ---------- */
 
 function NodeInner({ id, ynode, selected }) {
-  const { provider, user } = useCollab();
+  const { provider, user, readOnly } = useCollab();
   const { deleteElements } = useReactFlow();
   const contentType = useYMapValue(ynode, 'contentType');
   const setContentType = useCallback((value) => ynode.set('contentType', value), [ynode]);
 
   return (
     <div className={`mt-node ${selected ? 'selected' : ''}`}>
-      <Handle type="target" position={Position.Top} />
+      <NodeResizer
+        isVisible={selected && !readOnly}
+        minWidth={NODE_MIN_SIZE.width}
+        minHeight={NODE_MIN_SIZE.height}
+        lineClassName="resize-line"
+        handleClassName="resize-handle"
+      />
+      <Handle type="target" position={Position.Top} isConnectable={!readOnly} />
 
       <div className="mt-header">
         <span className="drag-grip" title="Drag to move">⋮⋮</span>
-        <CollabText ytext={ynode.get('title')} className="title-input nodrag" placeholder="Node title" />
-        <button
-          type="button"
-          className="icon-btn nodrag"
-          title="Delete node"
-          onClick={() => deleteElements({ nodes: [{ id }] })}
-        >
-          🗑
-        </button>
+        <CollabText ytext={ynode.get('title')} readOnly={readOnly} className="title-input nodrag" placeholder="Node title" />
+        {!readOnly && (
+          <button
+            type="button"
+            className="icon-btn nodrag"
+            title="Delete node"
+            onClick={() => deleteElements({ nodes: [{ id }] })}
+          >
+            🗑
+          </button>
+        )}
       </div>
 
-      <div className="mt-body">
-        <select className="field select nodrag" value={contentType} onChange={(e) => setContentType(e.target.value)}>
+      <div className="mt-body nowheel">
+        <select
+          className="field select nodrag"
+          value={contentType}
+          disabled={readOnly}
+          onChange={(e) => setContentType(e.target.value)}
+        >
           {NODE_TYPES.map((t) => (
             <option key={t.value} value={t.value}>
               {t.label}
@@ -227,20 +345,20 @@ function NodeInner({ id, ynode, selected }) {
         </select>
 
         <div className="mt-content">
-          {contentType === 'text' && <TextContent ytext={ynode.get('text')} />}
-          {contentType === 'image' && <ImageContent ytext={ynode.get('imageUrl')} />}
+          {contentType === 'text' && <TextContent ytext={ynode.get('text')} readOnly={readOnly} />}
+          {contentType === 'image' && <ImageContent ytext={ynode.get('imageUrl')} readOnly={readOnly} />}
           {contentType === 'tiptap' && (
             <div className="nodrag">
-              <TiptapEditor fragment={ynode.get('doc')} provider={provider} user={user} />
+              <TiptapEditor fragment={ynode.get('doc')} provider={provider} user={user} editable={!readOnly} />
             </div>
           )}
-          {contentType === 'json' && <JsonContent ytext={ynode.get('json')} />}
+          {contentType === 'json' && <JsonContent ytext={ynode.get('json')} readOnly={readOnly} />}
         </div>
       </div>
 
       <NotesSection ynotes={ynode.get('notes')} />
 
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" position={Position.Bottom} isConnectable={!readOnly} />
     </div>
   );
 }
