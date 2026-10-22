@@ -17,7 +17,7 @@ const TOOLBAR = [
 ];
 
 // Rich-text editor bound to a Y.XmlFragment, with live carets of other people.
-export default function TiptapEditor({ fragment, provider, user }) {
+export default function TiptapEditor({ fragment, provider, user, editable = true }) {
   const editor = useEditor(
     {
       extensions: [
@@ -25,6 +25,7 @@ export default function TiptapEditor({ fragment, provider, user }) {
         Collaboration.configure({ fragment }),
         CollaborationCaret.configure({ provider, user }),
       ],
+      editable,
       immediatelyRender: false, // required for SSR-safe rendering in Next.js
       editorProps: { attributes: { class: 'tiptap-content' } },
     },
@@ -42,6 +43,13 @@ export default function TiptapEditor({ fragment, provider, user }) {
   });
 
   if (!editor) return <div className="tiptap-wrapper tiptap-loading">Loading editor…</div>;
+  if (!editable) {
+    return (
+      <div className="tiptap-wrapper">
+        <EditorContent editor={editor} className="nowheel" />
+      </div>
+    );
+  }
 
   return (
     <div className="tiptap-wrapper">

@@ -1,93 +1,129 @@
 # 🧭 Discussion Canvas
 
-A whiteboard for meetings where each topic is a node. You can drag nodes, connect them, and switch what a node holds (plain text, an image, rich text, or JSON). Every node has its own **💬 Notes** thread for team comments.
+A whiteboard for meetings where each topic is a node. You can drag nodes, connect them, and switch what a node holds (plain text, an image, rich text, or JSON). Every node has its own **💬 Notes** chat, which can include photos taken with your phone or picked from your library.
 
-**Live co-op:** share the room link, and everyone edits the same board at the same time. You see each other's mouse pointers, who is online, and each other's carets inside rich-text nodes. There is no account and no database. Edits sync through [Yjs](https://yjs.dev) over two paths at once: encrypted messages through free public MQTT brokers (connects in about a second, works on any network) and direct WebRTC between browsers (lowest latency). Each browser also keeps its own copy in IndexedDB.
+People sign in with **Google**. Boards are saved on the server and edited live together, with each other's cursors, avatars of who is online, and shared rich-text editing.
 
 ## Tech stack
 
-- **Next.js 16** (App Router, client components)
-- **@xyflow/react 12** (React Flow, MIT): canvas, edges, MiniMap, Controls
-- **@tiptap/react 3** + StarterKit + Collaboration / CollaborationCaret: rich text inside nodes
-- **Yjs** (CRDT) + **mqtt.js** (encrypted relay over public brokers) + **Trystero** (direct WebRTC, peers found via Nostr relays) + **y-indexeddb** (local copy)
-- Plain CSS (`app/globals.css`), no Tailwind setup needed
+| Concern | Choice |
+| --- | --- |
+| App | **Next.js 16** (App Router, server actions) on **Vercel** |
+| Sign-in | **Auth.js v5** with the **Google** provider and the Prisma adapter (JWT sessions) |
+| Users, boards, membership | **PostgreSQL** via **Prisma 7** (Neon or Prisma Postgres from Vercel → Storage) |
+| Realtime board content | **Liveblocks** + **Yjs** (`@liveblocks/yjs`). Liveblocks stores the content |
+| Canvas | **@xyflow/react 12** (React Flow) |
+| Rich text | **Tiptap 3** with Collaboration and CollaborationCaret |
+| Photos in notes | **Vercel Blob** (private), served only to board members |
 
-## Quick start
+## How it works
 
-```bash
-npm install
-npm run dev
-# open http://localhost:3000
+```
+Browser ── Google sign-in ──► Auth.js ──► Prisma ──► Postgres  (users, boards, members)
+   │
+   ├── POST /api/liveblocks-auth ──► checks membership in Postgres ──► Liveblocks token
+   ├══ Liveblocks room (Yjs) ══ nodes, edges, text, notes, cursors, presence
+   └── POST /api/upload / GET /api/files/… ──► checks membership ──► Vercel Blob (private)
 ```
 
-Opening `/` creates a new room and adds `?room=<id>` to the URL. Click **🔗 Invite** to copy the link and send it to others.
+### Permissions
+- **Board owner:** renames the board, chooses what the share link allows, and deletes the board (which also deletes its Liveblocks room and photos).
+- **Share link:** "Anyone with the link can edit / view", or "Only current members". People must sign in with Google first. Opening a link adds the board to that person's list with the matching role.
+- **Viewers:** see everything live, including cursors, but can't change anything. Liveblocks enforces this with a read-only token, and the UI hides the editing controls.
+- **Notes:** authors can delete their own notes; the owner can delete any note.
 
-To try co-op alone, open the link in another browser, a private window, or on your phone.
-
-Production build: `npm run build && npm start`
+### Photos in notes
+- Tap **📷** in any node's notes. Phones offer *Take photo* or *Photo library*. You can also paste a screenshot into the note field.
+- Images are resized in the browser to at most 1600 px (JPEG) before upload, which keeps them small. The upload limit is 4 MB.
+- Files are stored **privately** in Vercel Blob and streamed through `/api/files/…`, which checks that the viewer is signed in and a member of that board. Image links are useless to anyone else.
 
 ## Deploy on Vercel
 
-Import the repo at <https://vercel.com/new> and keep the default settings. Nothing else is required: Vercel only serves the page, and syncing happens between visitors' browsers.
+1. **Database:** Vercel → your project → **Storage** → create **Neon** (or Prisma Postgres) and connect it. This adds `DATABASE_URL` (and `DATABASE_URL_UNPOOLED`).
+2. **Photos:** Storage → create a **Blob** store and connect it. This adds `BLOB_READ_WRITE_TOKEN`.
+3. **Google OAuth:** in [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an *OAuth client ID* of type *Web application*:
+   - Authorized redirect URI: `https://<your-domain>/api/auth/callback/google`
+   - If the consent screen is in *Testing* mode, add your testers' emails, or publish the app.
+4. **Liveblocks:** create a project at [liveblocks.io](https://liveblocks.io) and copy its **secret key**.
+5. **Environment variables** (Settings → Environment Variables):
 
-If Vercel shows its own login screen, either share your production domain (e.g. `chat-org.vercel.app`) or disable **Settings → Deployment Protection → Vercel Authentication**.
+   | Name | Value |
+   | --- | --- |
+   | `AUTH_SECRET` | output of `npx auth secret` or `openssl rand -base64 32` |
+   | `AUTH_GOOGLE_ID` | Google OAuth client ID |
+   | `AUTH_GOOGLE_SECRET` | Google OAuth client secret |
+   | `LIVEBLOCKS_SECRET_KEY` | `sk_…` |
+   | `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `BLOB_READ_WRITE_TOKEN` | added by steps 1–2 |
 
-## How co-op works
+6. **Redeploy.** `npm run build` runs `prisma migrate deploy` automatically, so the tables are created on the first deploy.
 
+## Local development
+
+```bash
+npm install
+cp .env.example .env.local   # fill in DATABASE_URL etc.
+npm run dev                  # http://localhost:3000
 ```
-                  ┌─── public MQTT brokers (EMQX, HiveMQ, Mosquitto) ───┐
-Browser A ──AES──►│   relay path: ~1 s to connect, works on any network   │──AES──► Browser B
-                  └───────────────────────────────────────────────────────┘
-Browser A ◄═══════ direct WebRTC path (fastest; peers found via Nostr relays) ═══════► Browser B
-   │                                                                          │
-IndexedDB (local copy per room)                                IndexedDB (local copy per room)
+
+**Fully offline dev (no Google, no Liveblocks account):**
+```bash
+npm run liveblocks:dev       # local Liveblocks server on :1153
+# in .env.local:
+#   AUTH_DEV_LOGIN=1                                  → name-only sign-in (never active on Vercel)
+#   LIVEBLOCKS_SECRET_KEY=sk_localdev
+#   LIVEBLOCKS_BASE_URL=http://localhost:1153
+#   NEXT_PUBLIC_LIVEBLOCKS_BASE_URL=http://localhost:1153
+#   (leave BLOB_READ_WRITE_TOKEN empty → photos go to ./.uploads)
+npx prisma migrate deploy    # create tables in your DATABASE_URL
+npm run dev
 ```
 
-- **Two paths, first one wins.** Every edit and cursor move goes out on both paths. Each message carries an id, so the copy that arrives second is dropped. If one path is down or blocked, the other keeps working.
-- **Relay path.** Messages are encrypted (AES-GCM) with a key derived from the room id, and the MQTT topic is a hash, so the brokers never see your board or room link. Cursor updates on this path are batched to about 16 per second. Messages over 200 KB (very large boards) only travel on the direct path.
-- **Direct path.** Trystero introduces browsers to each other through public Nostr relays; after that, data flows browser to browser.
-- **Self-healing.** Every 20 s, and whenever a connection comes back, browsers compare what they have and send each other anything that's missing.
-- **Merging.** Yjs merges simultaneous edits. Titles, text, URLs and JSON merge character by character. Rich text merges as a document. Notes are an append-only list. Node position and type are last-writer-wins.
-- **Persistence.** A room survives as long as **anyone** who has opened it still has their local copy. When someone rejoins, their copy merges with everyone else's. To keep a durable backup, use **⬇ Export**.
-- **Status dot.** Green = connected to at least one relay server or peer; amber = still connecting (edits are saved locally and sync once connected). Hover it for counts.
-
-### Limitations
-
-1. **Free public services.** The MQTT brokers and Nostr relays are free community services with no uptime guarantee. Using several of each means one outage doesn't stop sync.
-2. **Access control.** Anyone with the room link can join and edit, so treat the link like a password. Room ids are 16 random hex characters.
-3. **Custom servers (optional).** In Vercel's environment variables, set `NEXT_PUBLIC_MQTT_URLS=wss://broker.one/mqtt,wss://broker.two/mqtt` and/or `NEXT_PUBLIC_NOSTR_RELAYS=wss://relay.one,wss://relay.two`, then redeploy.
+**Schema changes:** edit `prisma/schema.prisma`, then run `npm run db:migrate`. This creates a new migration in `prisma/migrations/`; commit it.
 
 ## Features
 
 | Area | What it does |
 | --- | --- |
-| Canvas | Drag, pan, zoom, connect handles (top = input, bottom = output), MiniMap colored by node type, zoom controls |
-| Node types | 📄 Text · 🖼️ Image (URL + live preview + error state) · ✍️ Tiptap (toolbar: bold/italic/strike/H2/lists/code) · 📊 JSON (live validation + Format) |
-| Switching types | Each type keeps its own field, so switching back and forth doesn't lose content |
-| Notes | Collapsible thread per node with a count, author avatar in the author's color, timestamp, and delete on hover |
-| Co-op | Shared rooms via URL, live cursors with names, avatars of who's online, live rich-text co-editing with named carets, and a connection status dot |
-| Identity | Name and color shown to others. Edit your name in the toolbar; it is remembered per browser |
-| Export / Import | Download the board as `.json`. Importing replaces the board for everyone in the room, after a confirmation |
-| Rooms | **✚ New board** opens a fresh room in a new tab. **↺ Reset** restores the sample board for everyone, after a confirmation |
+| Boards | "My boards" dashboard; create, rename (owner), delete (owner) or leave (member) |
+| Canvas | Drag, pan, zoom, connect handles (large, easy to grab), MiniMap colored by node type, zoom controls |
+| Resizable nodes | Drag a selected node's edges or corners. Minimum 300 × 600, default 320 × 600. Size syncs to everyone, and content stretches to fill |
+| Node types | 📄 Text · 🖼️ Image URL · ✍️ Tiptap rich text · 📊 JSON (validation + Format) |
+| Live co-editing | Text fields merge character by character; Tiptap merges as a document, with named carets |
+| Presence | Live cursors with names, avatars (Google photo) of who's online, connection status |
+| Notes chat | Per-node thread with author, time, text and photos |
+| Export / Import | Download a board as `.json`; importing replaces the board for everyone (after confirmation). **✨ Sample** loads a demo board |
+| Mobile | Compact header and bottom toolbar on phones; camera upload in notes |
 
 ## Project structure
 
 ```
 app/
-  page.jsx              Room bootstrap, Yjs ⇄ React Flow mirroring, toolbar, export/import
-  layout.jsx            Root layout + global CSS
-  globals.css           All styling (incl. cursors and carets)
+  page.jsx                     "My boards" dashboard (server component)
+  signin/page.jsx              Google sign-in (+ local dev login)
+  b/[roomId]/page.jsx          Board page: auth + access check, then the canvas
+  actions.js                   Server actions: create / rename / share settings / delete or leave
+  api/auth/[...nextauth]/      Auth.js routes
+  api/liveblocks-auth/         Issues Liveblocks tokens after checking membership
+  api/upload/                  Photo upload for notes
+  api/files/[...path]/         Streams stored photos to board members only
+auth.js                        Auth.js config (Google, Prisma adapter, dev login)
 components/
-  MultiTypeNode.jsx     Custom node: title, type dropdown, content, notes (reads its Y.Map)
-  TiptapEditor.jsx      Collaborative Tiptap editor + toolbar
-  CollabText.jsx        <input>/<textarea> bound to a Y.Text (minimal diffs, caret kept in place)
-  Presence.jsx          Remote cursors + online avatars (Yjs awareness)
+  BoardCanvas.jsx              Canvas, toolbar, share panel, Yjs ⇄ React Flow mirroring
+  MultiTypeNode.jsx            Node: title, type, content, notes chat with photos
+  TiptapEditor.jsx             Collaborative Tiptap editor
+  CollabText.jsx               <input>/<textarea> bound to a Y.Text
+  Presence.jsx                 Remote cursors + online avatars
+  BoardListItem.jsx            Dashboard row
 lib/
-  board.js              Node factory, sample board, import validation
-  collab.js             Shared document layout, HTML ⇄ Y.XmlFragment, React hooks
-  collabProvider.js     Yjs provider: sync + awareness protocol, de-duplication, periodic resync
-  transports.js         Encrypted MQTT relay transport + direct WebRTC (Trystero) transport
-  useCollabSession.js   Y.Doc + IndexedDB + provider lifecycle
+  access.js                    Board roles and link access rules
+  board.js                     Node factory, sample board, import validation, ids, colors
+  collab.js                    Yjs document layout, HTML ⇄ Y.XmlFragment, hooks
+  useCollabSession.js          Liveblocks room + Yjs provider lifecycle
+  image.js                     Client-side resize + upload
+  storage.js                   Vercel Blob (private) / local disk storage
+  prisma.js, liveblocks-server.js
+prisma/schema.prisma           User, Account, Session, Board, BoardMember
+prisma/migrations/             SQL migrations (applied on build)
 ```
 
 ## Board file format (export / import)
@@ -95,6 +131,7 @@ lib/
 ```json
 {
   "version": 1,
+  "title": "Sprint review",
   "nodes": [
     {
       "id": "node_ab12cd34",
@@ -104,7 +141,9 @@ lib/
         "title": "Topic",
         "contentType": "text | image | tiptap | json",
         "text": "", "imageUrl": "", "html": "<p></p>", "json": "{}",
-        "notes": [{ "id": "note_1", "author": "Alice", "color": "#e11d48", "message": "Hi", "createdAt": "2026-10-14T10:00:00.000Z" }]
+        "notes": [{ "id": "note_1", "authorId": "…", "author": "Alice", "color": "#e11d48", "message": "Hi",
+                    "image": { "url": "/api/files/boards/…/….jpg", "width": 1600, "height": 900 },
+                    "createdAt": "2026-10-22T10:00:00.000Z" }]
       }
     }
   ],
@@ -112,11 +151,4 @@ lib/
 }
 ```
 
-Files exported before co-op existed can still be imported.
-
-## Implementation notes
-
-- **Yjs is the source of truth.** React Flow's `nodes` state is a mirror that adds local-only view state (selection, measured size, an in-progress drag). Keystrokes inside a node don't re-render the canvas; only structure, position and type changes do.
-- **Who seeds a room.** Only the browser that *creates* a room fills it with the starter board, so people joining never get duplicate nodes. A board saved in `localStorage` by the pre-co-op version is moved into your first new room.
-- **Dragging and scrolling inside nodes.** Interactive elements use React Flow's `nodrag` class, and scrollable areas use `nowheel`.
-- **Rendering.** Tiptap uses `immediatelyRender: false` and loads client-only. The sync provider and y-indexeddb are imported dynamically inside effects.
+Photos in an export are links to the original board. They only load for members of that board.

@@ -1,0 +1,102 @@
+// Users, accounts and board access. Board *content* lives in Liveblocks (Yjs), not here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Who may open a board just by having its link (members always keep their own role).
+enum LinkAccess {
+  NONE
+  VIEW
+  EDIT
+}
+
+enum Role {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+model User {
+  id            String        @id @default(cuid())
+  name          String?
+  email         String?       @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  accounts      Account[]
+  sessions      Session[]
+  ownedBoards   Board[]       @relation("BoardOwner")
+  memberships   BoardMember[]
+}
+
+model Board {
+  id         String        @id @default(cuid())
+  /// Liveblocks room id; also the shareable URL segment (/b/<roomId>).
+  roomId     String        @unique
+  title      String
+  ownerId    String
+  owner      User          @relation("BoardOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  linkAccess LinkAccess    @default(EDIT)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  members    BoardMember[]
+
+  @@index([ownerId])
+}
+
+model BoardMember {
+  boardId      String
+  userId       String
+  role         Role     @default(EDITOR)
+  joinedAt     DateTime @default(now())
+  lastOpenedAt DateTime @default(now())
+  board        Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([boardId, userId])
+  @@index([userId, lastOpenedAt])
+}
+
+// ----- Auth.js (Prisma adapter) -----
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?  @db.Text
+  access_token      String?  @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?  @db.Text
+  session_state     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
