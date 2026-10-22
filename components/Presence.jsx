@@ -69,6 +69,9 @@ export function OnlineUsers({ awareness, status }) {
         ))}
         {people.length > 6 && <div className="avatar more">+{people.length - 6}</div>}
       </div>
+      <span className="conn-text">
+        {live ? `Live · relay ${status.relays} · direct ${status.peers}` : 'Connecting…'}
+      </span>
     </div>
   );
 }
